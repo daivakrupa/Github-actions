@@ -1,0 +1,96 @@
+name: s3 Deployment
+
+env:
+  BRANCH_NAME: main
+  BACKUP_BUCKET_NAME: backup
+  S3_BUCKET_NAME: landing
+  AWS_REGION: us-east-1
+  CLOUDFRONT_ID: E22Fxxxxxxxx
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ${{ env.BRANCH_NAME }}
+  pull_request:
+    branches:
+      - ${{ env.BRANCH_NAME }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ env.BRANCH_NAME }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.12.1
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to S3
+        run: aws s3 sync dist/ s3://${{ env.S3_BUCKET_NAME }} --exclude ".htaccess" --delete
+
+      - name: Create CloudFront Invalidation
+        run: |
+          invalidationBatch='{"Paths": {"Quantity": 1, "Items": ["/*"]}, "CallerReference": "'$(uuidgen)'" }'
+          aws cloudfront create-invalidation --distribution-id ${{ env.CLOUDFRONT_ID }} --invalidation-batch "$invalidationBatch"
+
+      - name: Backup to Another S3 Bucket
+        run: aws s3 cp build s3://${{ env.BACKUP_BUCKET_NAME }}/build-${{ github.run_number }}/ --recursive
+
+      - name: Get commit details
+        id: commit_details
+        run: |
+          COMMIT_ID=$(git rev-parse HEAD)
+          COMMIT_MESSAGE=$(git log -1 --pretty=%B)
+          BUILD_USER=$(git log -1 --pretty=%an)
+          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
+          COMMIT_AUTHOR=$(git log -1 --pretty=%an)
+          echo "commit_id=$COMMIT_ID" >> $GITHUB_ENV
+          echo "commit_message=$COMMIT_MESSAGE" >> $GITHUB_ENV
+          echo "build_user=$BUILD_USER" >> $GITHUB_ENV
+          echo "changed_files=$CHANGED_FILES" >> $GITHUB_ENV
+          echo "commit_author=$COMMIT_AUTHOR" >> $GITHUB_ENV
+
+      - name: Send Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.office365.com
+          server_port: 587
+          secure: false
+          from: no-reply@gmail.com
+          to: daivakrupat@eficens.com
+          username: no-reply@gmail.com
+          password: ${{ secrets.SMTP_PASSWORD }}
+          ignore_cert: true
+          subject: Deployed Successfully
+          body: Deployment is Succeeded
+          html_body: |
+            <p>
+            The Deployment page is successfully completed. <br>
+            <p><b>Commit Message:</b> ${{ env.commit_message }}</p>
+            <p><b>Commit ID:</b> ${{ env.commit_id }}</p>
+            <p><b>Build User:</b> ${{ env.build_user }}</p>
+            <p><b>Commit Author:</b> ${{ env.commit_author }}</p>
+            <p><b>Branch:</b> ${{ github.ref }}</p>
+            <p><b>Changed Files:</b></p>
+            <pre>${{ env.changed_files }}</pre>
+            You can access the page by clicking <a href="https://abc.com">here</a></p>
