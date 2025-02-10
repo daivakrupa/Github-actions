@@ -1,0 +1,52 @@
+name: Deploy to PROD Trusynth
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - multi-tenant
+
+jobs:
+  deploy-to-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Execute SSM Command
+        run: |
+          INSTANCE_ID="${{ secrets.PROD_INSTANCE_ID }}"
+          aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --targets Key=InstanceIds,Values="${INSTANCE_ID}" \
+            --parameters commands='[
+              "set -e",
+              "echo Starting deployment process...",
+              
+              "REPO_URL=https://${{ secrets.GIT_USERNAME }}:${{ secrets.GIT_TOKEN }}@github.com/TrueSynth/true-synth-backend.git",
+              "PROJECT_DIR=/home/ubuntu/true-synth-backend",
+              "IMAGE_NAME=trusynth-prod",
+              
+              "if [ -d \"$PROJECT_DIR\" ]; then",
+              "  echo \"Directory exists. Pulling latest changes...\"",
+              "  cd \"$PROJECT_DIR\" && sudo git pull origin multi-tenant",
+              "else",
+              "  echo \"Directory does not exist. Cloning repository...\"",
+              "  git clone --single-branch --branch multi-tenant \"$REPO_URL\" \"$PROJECT_DIR\"",
+              "  cd \"$PROJECT_DIR\"",
+              "fi",
+              " sudo docker stop $IMAGE_NAME ",
+              " sudo docker rm $IMAGE_NAME ",
+              " sudo docker rmi $IMAGE_NAME ",
+              "sudo docker build -t $IMAGE_NAME .",
+              "sudo docker run -d -p 8000:8000 --name $IMAGE_NAME $IMAGE_NAME "
+            ]' \
+            --comment "Running deployment commands for the Trusynth backend" \
+            
